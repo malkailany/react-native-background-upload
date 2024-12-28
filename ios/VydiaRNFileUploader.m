@@ -77,7 +77,7 @@ RCT_EXPORT_METHOD(getFileInfo:(NSString *)path resolve:(RCTPromiseResolveBlock)r
             if (error == nil)
             {
                 unsigned long long fileSize = [attributes fileSize];
-                [params setObject:[NSNumber numberWithLong:fileSize] forKey:@"size"];
+                [params setObject:[NSNumber numberWithLongLong:fileSize] forKey:@"size"];
             }
         }
         resolve(params);
@@ -450,6 +450,88 @@ totalBytesExpectedToSend:(int64_t)totalBytesExpectedToSend {
 
     if (completionHandler) {
         completionHandler(inputStream);
+    }
+}
+
+- (NSData *)readChunkFromFile:(NSURL *)fileUrl offset:(NSUInteger)offset length:(NSUInteger)length {
+    NSError *error = nil;
+    NSFileHandle *fileHandle = [NSFileHandle fileHandleForReadingFromURL:fileUrl error:&error];
+    
+    if (error || !fileHandle) {
+        NSLog(@"Failed to open file for chunking: %@", error);
+        return nil;
+    }
+    
+    @try {
+        [fileHandle seekToFileOffset:offset];
+        NSData *chunk = [fileHandle readDataOfLength:length];
+        [fileHandle closeFile];
+        return chunk;
+    } @catch (NSException *exception) {
+        NSLog(@"Error reading chunk: %@", exception);
+        [fileHandle closeFile];
+        return nil;
+    }
+}
+
+RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+    NSString *uploadUrl = options[@"url"];
+    NSString *fileURI = options[@"path"];
+    NSNumber *offset = options[@"offset"];
+    NSNumber *chunkSize = options[@"chunkSize"];
+    NSString *customUploadId = options[@"customUploadId"];
+    NSDictionary *headers = options[@"headers"];
+    
+    if (!offset || !chunkSize) {
+        reject(@"RN Uploader", @"Offset and chunkSize are required", nil);
+        return;
+    }
+    
+    @try {
+        NSURL *fileUrl = [NSURL URLWithString:fileURI];
+        NSData *chunkData = [self readChunkFromFile:fileUrl 
+                                           offset:[offset unsignedIntegerValue] 
+                                           length:[chunkSize unsignedIntegerValue]];
+        
+        if (!chunkData) {
+            reject(@"RN Uploader", @"Failed to read chunk from file", nil);
+            return;
+        }
+        
+        NSURL *requestUrl = [NSURL URLWithString:uploadUrl];
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:requestUrl];
+        [request setHTTPMethod:@"PUT"];
+        
+        // Add headers
+        [headers enumerateKeysAndObjectsUsingBlock:^(id key, id val, BOOL *stop) {
+            if ([val respondsToSelector:@selector(stringValue)]) {
+                val = [val stringValue];
+            }
+            if ([val isKindOfClass:[NSString class]]) {
+                [request setValue:val forHTTPHeaderField:key];
+            }
+        }];
+        
+        // Add Content-Length header for the chunk
+        [request setValue:[NSString stringWithFormat:@"%lu", (unsigned long)chunkData.length] 
+          forHTTPHeaderField:@"Content-Length"];
+        
+        // Create upload task
+        NSURLSessionUploadTask *uploadTask = [[self urlSession:options[@"appGroup"]] 
+                                            uploadTaskWithRequest:request 
+                                            fromData:chunkData];
+        
+        NSString *taskDescription = customUploadId ?: [[NSUUID UUID] UUIDString];
+        uploadTask.taskDescription = taskDescription;
+        
+        [uploadTask resume];
+        resolve(uploadTask.taskDescription);
+    }
+    @catch (NSException *exception) {
+        reject(@"RN Uploader", exception.name, nil);
     }
 }
 

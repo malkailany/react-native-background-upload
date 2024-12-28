@@ -20,13 +20,48 @@ declare module 'react-native-background-upload' {
       [key: string]: string
     }
   }
+
+  export interface S3MultipartOptions {
+    url: string;
+    path: string;
+    headers?: {
+      [index: string]: string;
+    };
+    partSize?: number; // Size in bytes for each part
+    maxConcurrentUploads?: number;
+    appGroup?: string;
+  }
+
+  export interface S3PartData {
+    ETag: string;
+    PartNumber: number;
+  }
+
+  export interface S3CompletedData extends EventData {
+    parts: S3PartData[];
+    bucket: string;
+    key: string;
+    location: string;
+  }
   
-  export type FileInfo = {
-    name: string
-    exists: boolean
-    size?: number
-    extension?: string
-    mimeType?: string
+  export interface ChunkUploadOptions {
+    url: string;
+    path: string;
+    offset: number;
+    chunkSize: number;
+    customUploadId?: string;
+    headers?: {
+      [index: string]: string;
+    };
+    appGroup?: string;
+  }
+
+  export interface FileInfo extends Record<string, any> {
+    name: string;
+    exists: boolean;
+    size?: number;
+    extension?: string;
+    mimeType?: string;
   }
 
   export type NotificationOptions = {
@@ -142,5 +177,28 @@ declare module 'react-native-background-upload' {
     ): EventSubscription
     static getFileInfo(path: string): Promise<FileInfo>
     static cancelUpload(uploadId: uploadId): Promise<boolean>
+    static initiateS3MultipartUpload(
+      options: S3MultipartOptions
+    ): Promise<{ uploadId: string }>;
+    static uploadS3Part(
+      options: S3MultipartOptions & {
+        uploadId: string;
+        partNumber: number;
+      }
+    ): Promise<S3PartData>;
+    static completeS3MultipartUpload(
+      options: S3MultipartOptions & {
+        uploadId: string;
+        parts: S3PartData[];
+      }
+    ): Promise<S3CompletedData>;
+    static abortS3MultipartUpload(
+      options: S3MultipartOptions & {
+        uploadId: string;
+      }
+    ): Promise<boolean>;
+    static uploadChunk(
+      options: ChunkUploadOptions
+    ): Promise<string>;
   }
 }
