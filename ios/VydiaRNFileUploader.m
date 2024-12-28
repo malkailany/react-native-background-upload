@@ -310,7 +310,7 @@ didCompleteWithError:(NSError *)error {
         NSDictionary *headers = [response allHeaderFields];
         if (headers) {
             NSLog(@"[RNFileUploader] Response headers: %@", headers);
-            [data setObject:headers forKey:@"headers"];
+            [data setObject:headers forKey:@"responseHeaders"];
             // Log the complete data object to verify structure
             NSLog(@"[RNFileUploader] Complete response data: %@", data);
         } else {
