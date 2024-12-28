@@ -22,6 +22,7 @@ static NSString *BACKGROUND_SESSION_ID = @"ReactNativeBackgroundUpload";
 NSURLSession *_urlSession = nil;
 
 + (BOOL)requiresMainQueueSetup {
+    NSLog(@"[RNFileUploader] Available methods: %@", [[self new] methodsOfClass:[self class]]);
     return NO;
 }
 
@@ -533,6 +534,20 @@ RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options
     @catch (NSException *exception) {
         reject(@"RN Uploader", exception.name, nil);
     }
+}
+
+// Helper method to list available methods
+- (NSArray *)methodsOfClass:(Class)class {
+    NSMutableArray *methods = [NSMutableArray array];
+    unsigned int methodCount = 0;
+    Method *methodList = class_copyMethodList(class, &methodCount);
+    for (unsigned int i = 0; i < methodCount; i++) {
+        Method method = methodList[i];
+        SEL selector = method_getName(method);
+        [methods addObject:NSStringFromSelector(selector)];
+    }
+    free(methodList);
+    return methods;
 }
 
 @end
