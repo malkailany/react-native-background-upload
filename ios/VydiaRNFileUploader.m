@@ -306,6 +306,18 @@ didCompleteWithError:(NSError *)error {
     if (response != nil)
     {
         [data setObject:[NSNumber numberWithInteger:response.statusCode] forKey:@"responseCode"];
+        // Add response headers to the data dictionary
+        NSDictionary *headers = [response allHeaderFields];
+        if (headers) {
+            NSLog(@"[RNFileUploader] Response headers: %@", headers);
+            [data setObject:headers forKey:@"headers"];
+            // Log the complete data object to verify structure
+            NSLog(@"[RNFileUploader] Complete response data: %@", data);
+        } else {
+            NSLog(@"[RNFileUploader] No headers found in response");
+        }
+    } else {
+        NSLog(@"[RNFileUploader] No response object available");
     }
     //Add data that was collected earlier by the didReceiveData method
     NSMutableData *responseData = _responsesData[@(task.taskIdentifier)];
