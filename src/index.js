@@ -25,6 +25,16 @@ export type StartUploadArgs = {
   notification?: NotificationArgs,
 };
 
+export type ChunkUploadArgs = {
+  url: string,
+  path: string,
+  offset: number,
+  chunkSize: number,
+  customUploadId?: string,
+  headers?: Object,
+  appGroup?: string,
+};
+
 const NativeModule =
   NativeModules.VydiaRNFileUploader || NativeModules.RNFileUploader; // iOS is VydiaRNFileUploader and Android is RNFileUploader
 const eventPrefix = 'RNFileUploader-';
@@ -119,4 +129,26 @@ export const addListener = (
   });
 };
 
-export default { startUpload, cancelUpload, addListener, getFileInfo };
+/*
+Uploads a chunk of a file to an HTTP endpoint.
+Options object:
+{
+  url: string.  url to post to.
+  path: string.  path to the file on the device
+  offset: number. starting position in the file
+  chunkSize: number. size of the chunk to upload
+  headers: hash of name/value header pairs
+}
+
+Returns a promise with the string ID of the upload.
+*/
+export const uploadChunk = (options: ChunkUploadArgs): Promise<string> =>
+  NativeModule.uploadChunk(options);
+
+export default {
+  startUpload,
+  cancelUpload,
+  addListener,
+  getFileInfo,
+  uploadChunk,
+};

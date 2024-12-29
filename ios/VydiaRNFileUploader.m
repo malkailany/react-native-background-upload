@@ -3,7 +3,6 @@
 #import <React/RCTEventEmitter.h>
 #import <React/RCTBridgeModule.h>
 #import <Photos/Photos.h>
-#import <objc/runtime.h>
 
 @interface VydiaRNFileUploader : RCTEventEmitter <RCTBridgeModule, NSURLSessionTaskDelegate>
 {
@@ -23,7 +22,6 @@ static NSString *BACKGROUND_SESSION_ID = @"ReactNativeBackgroundUpload";
 NSURLSession *_urlSession = nil;
 
 + (BOOL)requiresMainQueueSetup {
-    NSLog(@"[RNFileUploader] Available methods: %@", [[self new] methodsOfClass:[self class]]);
     return NO;
 }
 
@@ -476,40 +474,23 @@ totalBytesExpectedToSend:(int64_t)totalBytesExpectedToSend {
     }
 }
 
-RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
 {
-    int thisUploadId;
-    @synchronized(self.class)
-    {
-        thisUploadId = uploadId++;
-    }
-
     NSString *uploadUrl = options[@"url"];
     NSString *fileURI = options[@"path"];
     NSNumber *offset = options[@"offset"];
     NSNumber *chunkSize = options[@"chunkSize"];
     NSString *customUploadId = options[@"customUploadId"];
-    NSString *appGroup = options[@"appGroup"];
     NSDictionary *headers = options[@"headers"];
-
+    
+    if (!offset || !chunkSize) {
+        reject(@"RN Uploader", @"Offset and chunkSize are required", nil);
+        return;
+    }
+    
     @try {
-        NSURL *requestUrl = [NSURL URLWithString: uploadUrl];
-        if (requestUrl == nil) {
-            return reject(@"RN Uploader", @"URL not compliant with RFC 2396", nil);
-        }
-
-        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:requestUrl];
-        [request setHTTPMethod:@"PUT"];
-
-        [headers enumerateKeysAndObjectsUsingBlock:^(id  _Nonnull key, id  _Nonnull val, BOOL * _Nonnull stop) {
-            if ([val respondsToSelector:@selector(stringValue)]) {
-                val = [val stringValue];
-            }
-            if ([val isKindOfClass:[NSString class]]) {
-                [request setValue:val forHTTPHeaderField:key];
-            }
-        }];
-
         NSURL *fileUrl = [NSURL URLWithString:fileURI];
         NSData *chunkData = [self readChunkFromFile:fileUrl 
                                            offset:[offset unsignedIntegerValue] 
@@ -519,38 +500,39 @@ RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options resolve:(RCTPromiseResolve
             reject(@"RN Uploader", @"Failed to read chunk from file", nil);
             return;
         }
-
-        NSString *taskDescription = customUploadId ? customUploadId : [NSString stringWithFormat:@"%i", thisUploadId];
+        
+        NSURL *requestUrl = [NSURL URLWithString:uploadUrl];
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:requestUrl];
+        [request setHTTPMethod:@"PUT"];
+        
+        // Add headers
+        [headers enumerateKeysAndObjectsUsingBlock:^(id key, id val, BOOL *stop) {
+            if ([val respondsToSelector:@selector(stringValue)]) {
+                val = [val stringValue];
+            }
+            if ([val isKindOfClass:[NSString class]]) {
+                [request setValue:val forHTTPHeaderField:key];
+            }
+        }];
         
         // Add Content-Length header for the chunk
         [request setValue:[NSString stringWithFormat:@"%lu", (unsigned long)chunkData.length] 
           forHTTPHeaderField:@"Content-Length"];
-
-        NSURLSessionUploadTask *uploadTask = [[self urlSession:appGroup] 
+        
+        // Create upload task
+        NSURLSessionUploadTask *uploadTask = [[self urlSession:options[@"appGroup"]] 
                                             uploadTaskWithRequest:request 
                                             fromData:chunkData];
         
+        NSString *taskDescription = customUploadId ?: [[NSUUID UUID] UUIDString];
         uploadTask.taskDescription = taskDescription;
+        
         [uploadTask resume];
         resolve(uploadTask.taskDescription);
     }
     @catch (NSException *exception) {
         reject(@"RN Uploader", exception.name, nil);
     }
-}
-
-// Helper method to list available methods
-- (NSArray *)methodsOfClass:(Class)class {
-    NSMutableArray *methods = [NSMutableArray array];
-    unsigned int methodCount = 0;
-    Method *methodList = class_copyMethodList(class, &methodCount);
-    for (unsigned int i = 0; i < methodCount; i++) {
-        Method method = methodList[i];
-        SEL selector = method_getName(method);
-        [methods addObject:NSStringFromSelector(selector)];
-    }
-    free(methodList);
-    return methods;
 }
 
 @end
