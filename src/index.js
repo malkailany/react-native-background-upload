@@ -30,9 +30,8 @@ export type ChunkUploadArgs = {
   path: string,
   offset: number,
   chunkSize: number,
+  headers?: { [string]: string },
   customUploadId?: string,
-  headers?: Object,
-  appGroup?: string,
 };
 
 const NativeModule =
@@ -142,8 +141,9 @@ Options object:
 
 Returns a promise with the string ID of the upload.
 */
-export const uploadChunk = (options: ChunkUploadArgs): Promise<string> =>
-  NativeModule.uploadChunk(options);
+export const uploadChunk = (args: ChunkUploadArgs): Promise<string> => {
+  return NativeModule.uploadChunk(args);
+};
 
 export default {
   startUpload,

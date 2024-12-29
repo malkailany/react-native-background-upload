@@ -20,6 +20,9 @@ import net.gotev.uploadservice.protocols.binary.BinaryUploadRequest
 import net.gotev.uploadservice.protocols.multipart.MultipartUploadRequest
 import okhttp3.OkHttpClient
 import java.io.File
+import java.io.RandomAccessFile
+import java.io.FileInputStream
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
 class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
@@ -325,5 +328,101 @@ class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBa
   }
 
   override fun onHostDestroy() {
+  }
+
+  private fun readChunkFromFile(path: String, offset: Long, length: Int): ByteArray? {
+    try {
+      val file = File(path)
+      if (!file.exists()) {
+        Log.e(TAG, "File does not exist: $path")
+        return null
+      }
+
+      val inputStream = FileInputStream(file)
+      inputStream.skip(offset)
+      
+      val buffer = ByteArray(length)
+      val bytesRead = inputStream.read(buffer, 0, length)
+      
+      inputStream.close()
+      
+      return if (bytesRead > 0) {
+        if (bytesRead == length) buffer else buffer.copyOf(bytesRead)
+      } else null
+      
+    } catch (e: Exception) {
+      Log.e(TAG, "Error reading chunk: ${e.message}")
+      return null
+    }
+  }
+
+  @ReactMethod
+  fun uploadChunk(options: ReadableMap, promise: Promise) {
+    try {
+      if (!options.hasKey("url") || !options.hasKey("path") || 
+          !options.hasKey("offset") || !options.hasKey("chunkSize")) {
+        promise.reject(IllegalArgumentException("Missing required fields (url, path, offset, or chunkSize)"))
+        return
+      }
+
+      val url = options.getString("url")!!
+      val path = options.getString("path")!!
+      val offset = options.getDouble("offset").toLong()
+      val chunkSize = options.getInt("chunkSize")
+      val customUploadId = if (options.hasKey("customUploadId")) options.getString("customUploadId") else null
+
+      Log.d(TAG, "Starting chunk upload - Path: $path, Offset: $offset, Size: $chunkSize")
+
+      // Read the chunk
+      val chunkData = readChunkFromFile(path, offset, chunkSize)
+      if (chunkData == null) {
+        promise.reject(IllegalStateException("Failed to read chunk from file"))
+        return
+      }
+
+      Log.d(TAG, "Successfully read chunk of size: ${chunkData.size}")
+
+      // Create upload request
+      val request = BinaryUploadRequest(reactApplicationContext, url)
+      
+      // Set the chunk data
+      val tempFile = File(reactApplicationContext.cacheDir, "${System.currentTimeMillis()}-chunk")
+      tempFile.writeBytes(chunkData)
+      request.setFileToUpload(tempFile.absolutePath)
+
+      // Set method to PUT for S3
+      request.setMethod("PUT")
+
+      // Add headers if provided
+      if (options.hasKey("headers")) {
+        val headers = options.getMap("headers")!!
+        val keys = headers.keySetIterator()
+        while (keys.hasNextKey()) {
+          val key = keys.nextKey()
+          if (headers.getType(key) != ReadableType.String) {
+            promise.reject(IllegalArgumentException("Headers must be string key/values. Value was invalid for '$key'"))
+            return
+          }
+          request.addHeader(key, headers.getString(key)!!)
+        }
+      }
+
+      // Set custom upload ID if provided
+      if (customUploadId != null) {
+        request.setUploadID(customUploadId)
+      }
+
+      // Start the upload
+      val uploadId = request.startUpload()
+      
+      // Clean up temp file after upload starts
+      tempFile.deleteOnExit()
+      
+      promise.resolve(uploadId)
+      
+    } catch (e: Exception) {
+      Log.e(TAG, "Error in uploadChunk: ${e.message}")
+      promise.reject(e)
+    }
   }
 }

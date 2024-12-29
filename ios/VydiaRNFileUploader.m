@@ -378,7 +378,15 @@ didCompleteWithError:(NSError *)error {
         NSDictionary *headers = [response allHeaderFields];
         if (headers) {
             NSLog(@"[RNFileUploader] Response headers: %@", headers);
-            [data setObject:headers forKey:@"responseHeaders"];
+            
+            // Convert all header keys to lowercase for case-insensitive comparison
+            NSMutableDictionary *normalizedHeaders = [NSMutableDictionary dictionary];
+            [headers enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
+                normalizedHeaders[[key lowercaseString]] = obj;
+            }];
+            
+            [data setObject:normalizedHeaders forKey:@"responseHeaders"];
+            
             // Log the complete data object to verify structure
             NSLog(@"[RNFileUploader] Complete response data: %@", data);
         } else {
@@ -387,22 +395,38 @@ didCompleteWithError:(NSError *)error {
     } else {
         NSLog(@"[RNFileUploader] No response object available");
     }
+    
     //Add data that was collected earlier by the didReceiveData method
     NSMutableData *responseData = _responsesData[@(task.taskIdentifier)];
     if (responseData) {
         [_responsesData removeObjectForKey:@(task.taskIdentifier)];
-
+        
         NSString *response = [[NSString alloc] initWithData:responseData encoding:NSUTF8StringEncoding];
         [data setObject:response forKey:@"responseBody"];
     } else {
         [data setObject:[NSNull null] forKey:@"responseBody"];
     }
-
+    
     [self removeFilesForUpload:task.taskDescription];
-
+    
     if (error == nil)
     {
-        [self _sendEventWithName:@"RNFileUploader-completed" body:data];
+        // Check if we have the ETag in the response headers
+        NSDictionary *responseHeaders = data[@"responseHeaders"];
+        NSString *etag = responseHeaders[@"etag"];
+        if (!etag) {
+            etag = responseHeaders[@"Etag"];  // Try with capital E
+        }
+        if (!etag) {
+            etag = responseHeaders[@"ETag"];  // Try with capital T
+        }
+        
+        if (etag) {
+            [self _sendEventWithName:@"RNFileUploader-completed" body:data];
+        } else {
+            [data setObject:@"No ETag in response" forKey:@"error"];
+            [self _sendEventWithName:@"RNFileUploader-error" body:data];
+        }
     }
     else
     {
@@ -453,59 +477,114 @@ totalBytesExpectedToSend:(int64_t)totalBytesExpectedToSend {
     }
 }
 
-- (NSData *)readChunkFromFile:(NSURL *)fileUrl offset:(NSUInteger)offset length:(NSUInteger)length {
-    NSError *error = nil;
-    NSFileHandle *fileHandle = [NSFileHandle fileHandleForReadingFromURL:fileUrl error:&error];
+- (NSData *)readChunkFromFile:(NSString *)path offset:(NSUInteger)offset length:(NSUInteger)length {
+    NSLog(@"[RNFileUploader] Starting readChunkFromFile with path: %@, offset: %lu, length: %lu", path, (unsigned long)offset, (unsigned long)length);
     
-    if (error || !fileHandle) {
-        NSLog(@"Failed to open file for chunking: %@", error);
+    // Escape non latin characters in filename
+    NSString *escapedPath = [path stringByAddingPercentEncodingWithAllowedCharacters: NSCharacterSet.URLQueryAllowedCharacterSet];
+    NSLog(@"[RNFileUploader] Escaped path: %@", escapedPath);
+    
+    NSURL *fileUri = [NSURL URLWithString:escapedPath];
+    NSString *pathWithoutProtocol = [fileUri path];
+    NSLog(@"[RNFileUploader] Path without protocol: %@", pathWithoutProtocol);
+    
+    NSError *error = nil;
+    NSData *fileData = [NSData dataWithContentsOfFile:pathWithoutProtocol options:NSDataReadingMappedIfSafe error:&error];
+    
+    if (!fileData) {
+        NSLog(@"[RNFileUploader] Failed to read file at path: %@, error: %@", pathWithoutProtocol, error);
         return nil;
     }
     
+    NSLog(@"[RNFileUploader] Successfully read file, total size: %lu", (unsigned long)fileData.length);
+    
     @try {
-        [fileHandle seekToFileOffset:offset];
-        NSData *chunk = [fileHandle readDataOfLength:length];
-        [fileHandle closeFile];
-        return chunk;
+        NSRange range = NSMakeRange(offset, MIN(length, fileData.length - offset));
+        NSLog(@"[RNFileUploader] Attempting to read range - location: %lu, length: %lu", (unsigned long)range.location, (unsigned long)range.length);
+        
+        if (range.location + range.length <= fileData.length) {
+            NSData *chunk = [fileData subdataWithRange:range];
+            NSLog(@"[RNFileUploader] Successfully read chunk of size: %lu", (unsigned long)chunk.length);
+            return chunk;
+        } else {
+            NSLog(@"[RNFileUploader] Invalid range: offset=%lu length=%lu fileSize=%lu", 
+                  (unsigned long)offset, 
+                  (unsigned long)length, 
+                  (unsigned long)fileData.length);
+            return nil;
+        }
     } @catch (NSException *exception) {
-        NSLog(@"Error reading chunk: %@", exception);
-        [fileHandle closeFile];
+        NSLog(@"[RNFileUploader] Error reading chunk: %@", exception);
         return nil;
     }
 }
 
-RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
+- (NSURL *)saveChunkToTempFile:(NSData *)chunkData withId:(NSString *)uploadId {
+    NSString *tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-chunk", uploadId]];
+    NSURL *tempUrl = [NSURL fileURLWithPath:tempPath];
+    
+    NSError *error;
+    if (![chunkData writeToURL:tempUrl options:NSDataWritingAtomic error:&error]) {
+        NSLog(@"[RNFileUploader] Failed to write chunk to temp file: %@", error);
+        return nil;
+    }
+    
+    return tempUrl;
+}
+
+RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 {
+    NSLog(@"[RNFileUploader] Starting uploadChunk with options: %@", options);
+    
+    int thisUploadId;
+    @synchronized(self.class)
+    {
+        thisUploadId = uploadId++;
+    }
+    
     NSString *uploadUrl = options[@"url"];
     NSString *fileURI = options[@"path"];
     NSNumber *offset = options[@"offset"];
     NSNumber *chunkSize = options[@"chunkSize"];
     NSString *customUploadId = options[@"customUploadId"];
+    NSString *appGroup = options[@"appGroup"];
     NSDictionary *headers = options[@"headers"];
     
+    NSLog(@"[RNFileUploader] Parsed options - URL: %@, path: %@, offset: %@, chunkSize: %@", uploadUrl, fileURI, offset, chunkSize);
+    
     if (!offset || !chunkSize) {
+        NSLog(@"[RNFileUploader] Missing required parameters - offset: %@, chunkSize: %@", offset, chunkSize);
         reject(@"RN Uploader", @"Offset and chunkSize are required", nil);
         return;
     }
     
     @try {
-        NSURL *fileUrl = [NSURL URLWithString:fileURI];
-        NSData *chunkData = [self readChunkFromFile:fileUrl 
-                                           offset:[offset unsignedIntegerValue] 
-                                           length:[chunkSize unsignedIntegerValue]];
-        
+        NSLog(@"[RNFileUploader] Attempting to read chunk");
+        NSData *chunkData = [self readChunkFromFile:fileURI offset:[offset unsignedIntegerValue] length:[chunkSize unsignedIntegerValue]];
         if (!chunkData) {
+            NSLog(@"[RNFileUploader] Failed to read chunk from file");
             reject(@"RN Uploader", @"Failed to read chunk from file", nil);
             return;
         }
+        
+        NSLog(@"[RNFileUploader] Successfully read chunk of size: %lu", (unsigned long)chunkData.length);
+        
+        NSString *taskDescription = customUploadId ? customUploadId : [NSString stringWithFormat:@"%i", thisUploadId];
+        
+        // Save chunk to temp file
+        NSURL *tempChunkUrl = [self saveChunkToTempFile:chunkData withId:taskDescription];
+        if (!tempChunkUrl) {
+            reject(@"RN Uploader", @"Failed to save chunk to temp file", nil);
+            return;
+        }
+        
+        _filesMap[taskDescription] = tempChunkUrl;
         
         NSURL *requestUrl = [NSURL URLWithString:uploadUrl];
         NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:requestUrl];
         [request setHTTPMethod:@"PUT"];
         
-        // Add headers
+        NSLog(@"[RNFileUploader] Setting headers: %@", headers);
         [headers enumerateKeysAndObjectsUsingBlock:^(id key, id val, BOOL *stop) {
             if ([val respondsToSelector:@selector(stringValue)]) {
                 val = [val stringValue];
@@ -515,22 +594,19 @@ RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options
             }
         }];
         
-        // Add Content-Length header for the chunk
-        [request setValue:[NSString stringWithFormat:@"%lu", (unsigned long)chunkData.length] 
-          forHTTPHeaderField:@"Content-Length"];
+        [request setValue:[NSString stringWithFormat:@"%lu", (unsigned long)chunkData.length] forHTTPHeaderField:@"Content-Length"];
         
-        // Create upload task
-        NSURLSessionUploadTask *uploadTask = [[self urlSession:options[@"appGroup"]] 
-                                            uploadTaskWithRequest:request 
-                                            fromData:chunkData];
+        NSLog(@"[RNFileUploader] Creating upload task with description: %@", taskDescription);
         
-        NSString *taskDescription = customUploadId ?: [[NSUUID UUID] UUIDString];
+        NSURLSessionUploadTask *uploadTask = [[self urlSession:appGroup] uploadTaskWithRequest:request fromFile:tempChunkUrl];
         uploadTask.taskDescription = taskDescription;
         
         [uploadTask resume];
+        NSLog(@"[RNFileUploader] Upload task started");
         resolve(uploadTask.taskDescription);
     }
     @catch (NSException *exception) {
+        NSLog(@"[RNFileUploader] Exception in uploadChunk: %@", exception);
         reject(@"RN Uploader", exception.name, nil);
     }
 }
