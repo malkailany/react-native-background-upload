@@ -32,6 +32,8 @@ export type ChunkUploadArgs = {
   chunkSize: number,
   headers?: { [string]: string },
   customUploadId?: string,
+  parentUploadId?: string,
+  chunkIndex?: number,
 };
 
 const NativeModule =
@@ -89,22 +91,35 @@ export const startUpload = (options: StartUploadArgs): Promise<string> =>
   NativeModule.startUpload(options);
 
 /*
-Cancels active upload by string ID of the upload.
-
-Upload ID is returned in a promise after a call to startUpload method,
-use it to cancel started upload.
-
-Event "cancelled" will be fired when upload is cancelled.
-
-Returns a promise with boolean true if operation was successfully completed.
-Will reject if there was an internal error or ID format is invalid.
-
-*/
+ * Cancels active upload by string ID of the upload.
+ * Upload ID is returned in a promise after a call to startUpload method.
+ * Event "cancelled" will be fired when upload is cancelled.
+ *
+ * Returns a promise with boolean true if operation was successfully completed.
+ * Will reject if there was an internal error or ID format is invalid.
+ */
 export const cancelUpload = (cancelUploadId: string): Promise<boolean> => {
   if (typeof cancelUploadId !== 'string') {
     return Promise.reject(new Error('Upload ID must be a string'));
   }
   return NativeModule.cancelUpload(cancelUploadId);
+};
+
+/*
+ * Cancels all chunk uploads associated with a parent upload ID.
+ * Use this to cancel all chunks of a file being uploaded.
+ * Event "cancelled" will be fired for each chunk that is cancelled.
+ *
+ * Returns a promise with boolean true if operation was successfully completed.
+ * Will reject if there was an internal error or ID format is invalid.
+ */
+export const cancelChunkUploads = (
+  parentUploadId: string,
+): Promise<boolean> => {
+  if (typeof parentUploadId !== 'string') {
+    return Promise.reject(new Error('Parent Upload ID must be a string'));
+  }
+  return NativeModule.cancelUploadWithParentId(parentUploadId);
 };
 
 /*
@@ -142,12 +157,20 @@ Options object:
 Returns a promise with the string ID of the upload.
 */
 export const uploadChunk = (args: ChunkUploadArgs): Promise<string> => {
+  if (
+    !args.customUploadId &&
+    args.parentUploadId &&
+    args.chunkIndex !== undefined
+  ) {
+    args.customUploadId = `${args.parentUploadId}_chunk${args.chunkIndex}`;
+  }
   return NativeModule.uploadChunk(args);
 };
 
 export default {
   startUpload,
   cancelUpload,
+  cancelChunkUploads,
   addListener,
   getFileInfo,
   uploadChunk,

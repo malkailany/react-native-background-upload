@@ -369,7 +369,15 @@ class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBa
       val path = options.getString("path")!!
       val offset = options.getDouble("offset").toLong()
       val chunkSize = options.getInt("chunkSize")
-      val customUploadId = if (options.hasKey("customUploadId")) options.getString("customUploadId") else null
+      val parentUploadId = if (options.hasKey("parentUploadId")) options.getString("parentUploadId") else null
+      val chunkIndex = if (options.hasKey("chunkIndex")) options.getInt("chunkIndex") else null
+      
+      // Generate customUploadId for the chunk if parent info is provided
+      val customUploadId = if (parentUploadId != null && chunkIndex != null) {
+        "${parentUploadId}_chunk${chunkIndex}"
+      } else if (options.hasKey("customUploadId")) {
+        options.getString("customUploadId")
+      } else null
 
       Log.d(TAG, "Starting chunk upload - Path: $path, Offset: $offset, Size: $chunkSize")
 
@@ -407,7 +415,18 @@ class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBa
         }
       }
 
-      // Set custom upload ID if provided
+      // Add chunk-specific headers for ETag uniqueness
+      if (customUploadId != null) {
+        request.addHeader("X-Upload-Chunk-Id", customUploadId)
+      }
+      if (parentUploadId != null) {
+        request.addHeader("X-Upload-Parent-Id", parentUploadId)
+      }
+      if (chunkIndex != null) {
+        request.addHeader("X-Upload-Chunk-Index", chunkIndex.toString())
+      }
+
+      // Set custom upload ID for tracking
       if (customUploadId != null) {
         request.setUploadID(customUploadId)
       }
@@ -423,6 +442,40 @@ class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBa
     } catch (e: Exception) {
       Log.e(TAG, "Error in uploadChunk: ${e.message}")
       promise.reject(e)
+    }
+  }
+
+  /*
+   * Cancels all chunk uploads associated with a parent upload ID.
+   * Use this to cancel all chunks of a file being uploaded.
+   * Event "cancelled" will be fired for each chunk that is cancelled.
+   */
+  @ReactMethod
+  fun cancelUploadWithParentId(parentUploadId: String?, promise: Promise) {
+    if (parentUploadId == null) {
+      promise.reject(IllegalArgumentException("Parent Upload ID must be a string"))
+      return
+    }
+
+    try {
+      // Get all active uploads
+      val uploadTasks = UploadService.getTaskList()
+      var canceledAny = false
+
+      // Cancel any upload with matching parent ID pattern
+      for (task in uploadTasks) {
+        val taskId = task.params.id
+        if (taskId == parentUploadId || taskId.startsWith("${parentUploadId}_chunk")) {
+          UploadService.stopUpload(taskId)
+          canceledAny = true
+        }
+      }
+
+      promise.resolve(true)
+    } catch (exc: Exception) {
+      exc.printStackTrace()
+      Log.e(TAG, exc.message, exc)
+      promise.reject(exc)
     }
   }
 }

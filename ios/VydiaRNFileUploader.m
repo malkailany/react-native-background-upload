@@ -311,6 +311,50 @@ RCT_EXPORT_METHOD(cancelUpload: (NSString *)cancelUploadId resolve:(RCTPromiseRe
     resolve([NSNumber numberWithBool:YES]);
 }
 
+/*
+ * Cancels all uploads associated with a parent ID, including individual chunks
+ */
+RCT_EXPORT_METHOD(cancelUploadWithParentId:(NSString *)parentUploadId resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject) {
+    if (!parentUploadId) {
+        reject(@"RN Uploader", @"Parent Upload ID is required", nil);
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    NSMutableArray *canceledTasks = [NSMutableArray array];
+
+    [_urlSession getTasksWithCompletionHandler:^(NSArray *dataTasks, NSArray *uploadTasks, NSArray *downloadTasks) {
+        __strong typeof(self) strongSelf = weakSelf;
+        
+        for (NSURLSessionTask *task in uploadTasks) {
+            NSString *taskDescription = task.taskDescription;
+            
+            // Check if this task is related to the parent ID (either exact match or chunk)
+            if ([taskDescription isEqualToString:parentUploadId] || 
+                [taskDescription hasPrefix:[NSString stringWithFormat:@"%@_chunk", parentUploadId]]) {
+                [task cancel];
+                [canceledTasks addObject:taskDescription];
+                [strongSelf removeFilesForUpload:taskDescription];
+                
+                // Send cancelled event for each canceled task
+                [strongSelf _sendEventWithName:@"RNFileUploader-cancelled" 
+                    body:@{ 
+                        @"id": taskDescription,
+                        @"parentId": parentUploadId
+                    }
+                ];
+            }
+        }
+        
+        if (canceledTasks.count > 0) {
+            resolve(@YES);
+        } else {
+            // If no tasks were found to cancel, still return success
+            resolve(@YES);
+        }
+    }];
+}
+
 - (NSData *)createBodyWithBoundary:(NSString *)boundary
                          path:(NSString *)path
                          parameters:(NSDictionary *)parameters
@@ -547,6 +591,8 @@ RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options resolve:(RCTPromiseResolve
     NSNumber *offset = options[@"offset"];
     NSNumber *chunkSize = options[@"chunkSize"];
     NSString *customUploadId = options[@"customUploadId"];
+    NSString *parentUploadId = options[@"parentUploadId"];
+    NSNumber *chunkIndex = options[@"chunkIndex"];
     NSString *appGroup = options[@"appGroup"];
     NSDictionary *headers = options[@"headers"];
     
@@ -569,7 +615,15 @@ RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options resolve:(RCTPromiseResolve
         
         NSLog(@"[RNFileUploader] Successfully read chunk of size: %lu", (unsigned long)chunkData.length);
         
-        NSString *taskDescription = customUploadId ? customUploadId : [NSString stringWithFormat:@"%i", thisUploadId];
+        // Generate a unique task description that includes parent ID and chunk information
+        NSString *taskDescription;
+        if (customUploadId) {
+            taskDescription = customUploadId;
+        } else if (parentUploadId && chunkIndex) {
+            taskDescription = [NSString stringWithFormat:@"%@_chunk%@", parentUploadId, chunkIndex];
+        } else {
+            taskDescription = [NSString stringWithFormat:@"%i", thisUploadId];
+        }
         
         // Save chunk to temp file
         NSURL *tempChunkUrl = [self saveChunkToTempFile:chunkData withId:taskDescription];
@@ -593,6 +647,15 @@ RCT_EXPORT_METHOD(uploadChunk:(NSDictionary *)options resolve:(RCTPromiseResolve
                 [request setValue:val forHTTPHeaderField:key];
             }
         }];
+        
+        // Add chunk-specific headers to help with ETag uniqueness
+        [request setValue:[NSString stringWithFormat:@"%@", taskDescription] forHTTPHeaderField:@"X-Upload-Chunk-Id"];
+        if (parentUploadId) {
+            [request setValue:parentUploadId forHTTPHeaderField:@"X-Upload-Parent-Id"];
+        }
+        if (chunkIndex) {
+            [request setValue:[chunkIndex stringValue] forHTTPHeaderField:@"X-Upload-Chunk-Index"];
+        }
         
         [request setValue:[NSString stringWithFormat:@"%lu", (unsigned long)chunkData.length] forHTTPHeaderField:@"Content-Length"];
         
