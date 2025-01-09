@@ -50,6 +50,8 @@ declare module 'react-native-background-upload' {
     offset: number;
     chunkSize: number;
     customUploadId?: string;
+    parentUploadId?: string;
+    chunkIndex?: number;
     headers?: {
       [index: string]: string;
     };
@@ -177,6 +179,7 @@ declare module 'react-native-background-upload' {
     ): EventSubscription
     static getFileInfo(path: string): Promise<FileInfo>
     static cancelUpload(uploadId: uploadId): Promise<boolean>
+    static cancelChunkUploads(parentUploadId: string): Promise<boolean>
     static initiateS3MultipartUpload(
       options: S3MultipartOptions
     ): Promise<{ uploadId: string }>;
@@ -197,8 +200,6 @@ declare module 'react-native-background-upload' {
         uploadId: string;
       }
     ): Promise<boolean>;
-    static uploadChunk(
-      options: ChunkUploadOptions
-    ): Promise<string>;
+    static uploadChunk(options: ChunkUploadOptions): Promise<string>
   }
 }
