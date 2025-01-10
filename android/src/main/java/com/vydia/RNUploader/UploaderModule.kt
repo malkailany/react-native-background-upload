@@ -459,7 +459,7 @@ class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBa
 
     try {
       // Get all active uploads
-      val uploadTasks = UploadService.getTaskList()
+      val uploadTasks = UploadService.tasks
       var canceledAny = false
 
       // Cancel any upload with matching parent ID pattern
