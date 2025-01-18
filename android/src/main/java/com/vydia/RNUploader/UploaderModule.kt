@@ -359,6 +359,14 @@ class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBa
   @ReactMethod
   fun uploadChunk(options: ReadableMap, promise: Promise) {
     try {
+      if (!isGlobalRequestObserver) {
+        val application = reactContext.applicationContext as Application
+        createNotificationChannel()
+        initialize(application, notificationChannelID, BuildConfig.DEBUG)
+        isGlobalRequestObserver = true
+        GlobalRequestObserver(application, GlobalRequestObserverDelegate(reactContext))
+    }
+
       if (!options.hasKey("url") || !options.hasKey("path") || 
           !options.hasKey("offset") || !options.hasKey("chunkSize")) {
         promise.reject(IllegalArgumentException("Missing required fields (url, path, offset, or chunkSize)"))
@@ -452,29 +460,28 @@ class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBa
    */
   @ReactMethod
   fun cancelUploadWithParentId(parentUploadId: String?, promise: Promise) {
-      if (parentUploadId == null) {
-          promise.reject(IllegalArgumentException("Parent Upload ID must be a string"))
-          return
-      }
+    if (parentUploadId == null) {
+      promise.reject(IllegalArgumentException("Parent Upload ID must be a string"))
+      return
+    }
+
+    try {
+      val uploadTasks = UploadService.taskList
+      var canceledAny = false
   
-      try {
-          // Get all active uploads
-          val uploadTasks = UploadService.taskList
-          var canceledAny = false
-  
-          // Cancel any upload with matching parent ID pattern
-          for (task in uploadTasks) {
-              val taskId = task.params.id // Changed from task.id to task.params.id
-              if (taskId == parentUploadId || taskId.startsWith("${parentUploadId}_chunk")) {
-                  UploadService.stopUpload(taskId)
-                  canceledAny = true
-              }
+      // Cancel any upload with matching parent ID pattern
+      for (taskId in uploadTasks) {
+          if (taskId == parentUploadId || taskId.startsWith("${parentUploadId}_chunk")) {
+              UploadService.stopUpload(taskId)
+              canceledAny = true
           }
-  
-          promise.resolve(canceledAny)
-      } catch (exc: Exception) {
-          exc.printStackTrace()
-          Log.e(TAG, exc.message, exc)
-          promise.reject(exc)
       }
+
+      promise.resolve(true)
+    } catch (exc: Exception) {
+      exc.printStackTrace()
+      Log.e(TAG, exc.message, exc)
+      promise.reject(exc)
+    }
   }
+}
