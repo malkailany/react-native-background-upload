@@ -452,30 +452,29 @@ class UploaderModule(val reactContext: ReactApplicationContext) : ReactContextBa
    */
   @ReactMethod
   fun cancelUploadWithParentId(parentUploadId: String?, promise: Promise) {
-    if (parentUploadId == null) {
-      promise.reject(IllegalArgumentException("Parent Upload ID must be a string"))
-      return
-    }
-
-    try {
-      // Get all active uploads
-      val uploadTasks = UploadService.tasks
-      var canceledAny = false
-
-      // Cancel any upload with matching parent ID pattern
-      for (task in uploadTasks) {
-        val taskId = task.params.id
-        if (taskId == parentUploadId || taskId.startsWith("${parentUploadId}_chunk")) {
-          UploadService.stopUpload(taskId)
-          canceledAny = true
-        }
+      if (parentUploadId == null) {
+          promise.reject(IllegalArgumentException("Parent Upload ID must be a string"))
+          return
       }
-
-      promise.resolve(true)
-    } catch (exc: Exception) {
-      exc.printStackTrace()
-      Log.e(TAG, exc.message, exc)
-      promise.reject(exc)
-    }
+  
+      try {
+          // Get all active uploads
+          val uploadTasks = UploadService.taskList
+          var canceledAny = false
+  
+          // Cancel any upload with matching parent ID pattern
+          for (task in uploadTasks) {
+              val taskId = task.params.id // Changed from task.id to task.params.id
+              if (taskId == parentUploadId || taskId.startsWith("${parentUploadId}_chunk")) {
+                  UploadService.stopUpload(taskId)
+                  canceledAny = true
+              }
+          }
+  
+          promise.resolve(canceledAny)
+      } catch (exc: Exception) {
+          exc.printStackTrace()
+          Log.e(TAG, exc.message, exc)
+          promise.reject(exc)
+      }
   }
-}
